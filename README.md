@@ -1,5 +1,9 @@
 ## BACCAble 
 
+https://www.giuliaforums.com/threads/how-to-anti-theft-can-bus-device.63034/
+
+“…Basically any diagnostic session with the RFHUB or other control module starts with the 10 03 command sent to the address of the module, the RFHUB has the address 0xC7. So the command looks like 18 DA C7 F1 02 10 03 . Your tool can monitor the bus for the command and start sending 18 DA C7 F1 02 11 01 – the reset module command. The expected reply from the RFH would be 18 DA F1 C7 01 51 , so your tool can monitor the bus for the reply and immediately send another reset command. This most probably will result in AlfaOBD not able to proceed.”
+
 ## Scope
 This project uses the famous CANABLE (the cheapest can bus device on the market) in order to:
 - sniff on the can bus (useful for debug and exploit purposes)
