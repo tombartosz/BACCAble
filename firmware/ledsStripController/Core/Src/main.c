@@ -39,6 +39,10 @@ uint8_t panicAlarmStartMsgData[5][8]={	{0x02,0x11,0x01,0x00,},
 uint8_t startAndStopEnabled=1;
 uint32_t lastTimeStartAndstopDisablerButtonPressed=0;
 
+CAN_TxHeaderTypeDef shift_msg_header={.IDE=CAN_ID_STD, .RTR = CAN_RTR_DATA, .StdId=0x2ED, .DLC=8};
+uint8_t shift_msg_data[8];
+uint32_t currentRpmSpeed=0;
+
 // Storage for status and received message buffer
 CAN_RxHeaderTypeDef rx_msg_header;  //msg header
 uint8_t rx_msg_data[8] = {0};  //msg data
@@ -189,110 +193,198 @@ int main(void){
 		if(is_can_msg_pending(CAN_RX_FIFO0)){
 			// If message received from bus, parse the frame
 			if (can_rx(&rx_msg_header, rx_msg_data) == HAL_OK){
-				if(immobilizerEnabled){
-					//if it is a message of connection to RFHUB, reset the connection periodically, but start the panic alarm only once
-					if(rx_msg_header.IDE == CAN_ID_EXT){
-						if(rx_msg_header.RTR == CAN_RTR_DATA){
-							if(floodTheBus==0){ //if we are not flooding the bus
-								if ((rx_msg_header.ExtId==0x18DAC7F1) ||( (rx_msg_header.ExtId==0x18DAF1C7) && (floodTheBusStartTime==0)) ){  // If msg from thief or (reply from rfhub && it is the first time that it occurs)
-									//thief connected to RFHUB: we shall reset the RFHUB and start the alarm
-									//start to flood the bus with the rfhub disconnect message
-									floodTheBus=1;
-									floodTheBusStartTime=HAL_GetTick();
-									onboardLed_blue_on();
-								}
-							}
-						}
-					}
-
-
-					/*----------------------------------------------------------------------------------*/
-					// The following section intercepts buttons press sequence on the wheel.
-					// This sequence works only if the main panel of the car is on.
-					// We commented this section since we are not using it now. Uncomment to use it.
-					// When uncommented, the cycle duration could increase and make blink the red led.
-					// The action of the button's sequence is left empty for you to choose what to do.
-					/*----------------------------------------------------------------------------------*/
-					
-					// if Button is pressed on left area of the wheel (id 2FA), 3 byte length , different than 
-					// 0x10 (that sometimes is sent on the bus, but we are not interested in it)
-					/*
-					if (rx_msg_header.StdId==0x000002FA) {
-						if( (rx_msg_header.RTR == CAN_RTR_DATA) && (rx_msg_header.IDE == CAN_ID_STD) && (rx_msg_header.DLC==3) && (rx_msg_data[0]!=0x10) ){
-							//if 2 seconds has passed since last button press, restart password sequence
-							if (lastPressedWheelButtonTime+2000<HAL_GetTick()){
-								ButtonPressSequence1Index=0;
-								lastPressedWheelButtonDuration=0;
-								lastPressedWheelButtonTime=HAL_GetTick();
-							}
-							//if the previous button is still pressed, we shall consider it as the same button press
-							if ((lastPressedWheelButton== rx_msg_data[0]) ){
-								lastPressedWheelButtonDuration=lastPressedWheelButtonDuration+ (HAL_GetTick()-lastPressedWheelButtonTime) ;
-							}else{
-								//another button was pressed, let's consider it as a button release event:
-								//  if the button was pressed for at least 100msec, and if it is the button expected by the secret sequence
-								if(lastPressedWheelButtonDuration>100 && (lastPressedWheelButton==ButtonPressSequence1[ButtonPressSequence1Index])){
-									onboardLed_blue_on();
-									ButtonPressSequence1Index++; //prepare for next button in the sequence
-								}else{
-									//something else arrived. restart the sequence
-									ButtonPressSequence1Index=0;
-								}
-								lastPressedWheelButtonDuration=0;
-							}
-
-							//manage the particular case of last button of the sequence pressed for enough time
-							if(lastPressedWheelButtonDuration>100 && (lastPressedWheelButton==ButtonPressSequence1[ButtonPressSequence1Index]) && ButtonPressSequence1Index==ButtonPressSequence1Len-1){
-								ButtonPressSequence1Index++;
-							}
-
-							lastPressedWheelButton= rx_msg_data[0]; //store last pressed button
-							lastPressedWheelButtonTime=HAL_GetTick(); //store last time a button was pressed
-
-							//if password sequence was fully correctly typed...
-							if(ButtonPressSequence1Index==ButtonPressSequence1Len){
-								// reset password sequence, so that we can type it again in the future, 
-								// then do what you shall do
-								ButtonPressSequence1Index=0; 
-								onboardLed_red_on();
-								// what do we want to do? this will work only if the bus is not flood 
-								// and the car panel is on.
-								// future usage....
-							}
-						}
-					}
-					*/
-					/*----------------------------------------------------------------------------------*/
-					
-				} //end of immobilizer section
 
 				#if defined(ACT_AS_CANABLE)
 					uint16_t msg_len = slcan_parse_frame((uint8_t *)&msg_buf, &rx_msg_header, rx_msg_data);
 					if(msg_len){
 						CDC_Transmit_FS(msg_buf, msg_len); //transmit data via usb
 					}
-				#else
-					UNUSED(msg_buf); //avoid warning when used as leds strip controller
-					//se é un messaggio ricevuto e se ha id standard
-					if((rx_msg_header.RTR == CAN_RTR_DATA) && (rx_msg_header.IDE == CAN_ID_STD) ){
-						//se e' il messaggio che contiene la pressione dell'acceleratore (id 412), se é lungo 5 byte, se il valore é >51 (sfrutto le info ottenute sniffando)
-						if (rx_msg_header.StdId==0x00000412){
-							if( (rx_msg_header.DLC==5) && (rx_msg_data[3]>=51) ){
-								timeSinceLastReceivedAcceleratorMessage=HAL_GetTick();
-								ledsStripIsOn=1;
-								scaledVolume=scaleVolume(rx_msg_data[3]); //prendi il dato e scalalo, per prepararlo per l'invio alla classe vumeter
-								vuMeterUpdate(scaledVolume,scaledColorSet);
-							}
-						}
-						//se e' il messaggio che contiene la marcia (id 2ef) e se é lungo 8 byte
-						if (rx_msg_header.StdId==0x000002EF){
-							if(rx_msg_header.DLC==8){
-								scaledColorSet=scaleColorSet(rx_msg_data[0]); //prendi il dato e scalalo, per prepararlo per l'invio alla classe vumeter
-								vuMeterUpdate(scaledVolume,scaledColorSet);
-							}
-						}
-					}
 				#endif
+
+				if (rx_msg_header.RTR == CAN_RTR_DATA){
+					switch(rx_msg_header.IDE){
+						case CAN_ID_EXT:
+							if(immobilizerEnabled){
+								//if it is a message of connection to RFHUB, reset the connection periodically, but start the panic alarm only once
+								if(floodTheBus==0){ //if we are not flooding the bus
+									if ((rx_msg_header.ExtId==0x18DAC7F1) ||( (rx_msg_header.ExtId==0x18DAF1C7) && (floodTheBusStartTime==0)) ){  // If msg from thief or (reply from rfhub && it is the first time that it occurs)
+										//thief connected to RFHUB: we shall reset the RFHUB and start the alarm
+										//start to flood the bus with the rfhub disconnect message
+										floodTheBus=1;
+										floodTheBusStartTime=HAL_GetTick();
+										onboardLed_blue_on();
+									}
+								}
+							} //end of immobilizer section
+							break;
+						case CAN_ID_STD: //if standard ID
+
+							UNUSED(msg_buf); //avoid warning when used as leds strip controller
+							switch(rx_msg_header.StdId){ //messages in this switch is on C can bus, only when on different bus, the comments explicitly tells if it is on another can bus
+
+								case 0x00000090:
+									//on BH can bus, slow bus at 125kbps, this message contains:
+									//total frame number is on byte 0 from bit 7 to 3
+									//frame number is on byte 0 from bit 2 to 0 and byte1 from bit7 to 6
+									//infoCode is on byte1 from bit 5 to 0 (0x12=phone connected, 0x13=phone disconnected, 0x15=call in progress, 0x17=call in wait, 0x18=call terminated, 0x11=clear display, ...)
+									//UTF text 1 is on byte 2 and byte 3
+									//UTF text 2 is on byte 4 and byte 5
+									//UTF text 3 is on byte 6 and byte 7
+									break;
+								case 0x000000FC: //message to dashboard containing rpm speed and not only
+									#if defined(SHIFT_INDICATOR_ENABLED)
+										if(rx_msg_header.DLC==8){
+											//extract rpm speed and set the variable currentRpmSpeed
+											currentRpmSpeed=(rx_msg_data[0] *256 + (rx_msg_data[1] & ~0x3) )/4;
+											//onboardLed_blue_on();
+										}
+									#endif
+									//engine speed fail is on byte1 bit 1.
+									//engine StopStart Status is on byte 1 bit 0 and byte 2 bit 7
+									//engine Status is on byte 2 bit 6 and bit 5.
+									//gas pedal position is on byte 2 from bit 4 to 0 and byte 3 from bit 7 to 5.
+									//gas pedal position fail is on byte3 bit 4.
+									//.....
+									//alternator fail is on byte 3, bit1.
+									//stopStart status is on byte3 bit 0 and byte4 bit7.
+									//CC brake intervention request is on byte 4, bit5
+									//bank deactivation status is on byte5, bit 7 and 6
+									//CC brake intervention is on byte 5 from bit 5 to 0 and byte 6 from bit 7 to 4.
+									break;
+								case 0x000001F0:
+									//clutch interlock is on byte 0 bit 7
+									//clutch upstop is on byte0 bit 6
+									//actual pedal position is on byte0 from bit 4 to 0 and byte 1 from bit7 to 5
+									//analog cluch is on byte 1 from bit 4 to 0 and byte 2 from bit 7 to 5.
+
+									break;
+								case 0x000002ED: //message to dashboard containing shift indicator
+									#if defined(SHIFT_INDICATOR_ENABLED)
+										if(rx_msg_header.DLC==8){
+											if (currentRpmSpeed>SHIFT_THRESHOLD-1 ){ //if the rpm speed is above SHIFT_THRESHOLD rpm, then the packet need to be modified, therefore,
+												//copy 8 bytes from msgdata rx (rx_msg_data) to msg data tx (shift_msg_data)
+												memcpy(&shift_msg_data, &rx_msg_data, 8);
+
+												if(currentRpmSpeed>(SHIFT_THRESHOLD-1) &&  currentRpmSpeed<(SHIFT_THRESHOLD+500)){ //set lamp depending on rpm speed
+													//change byte6, bit 1 and 0(lsb) to 01 (binary) meaning "gear shift urgency level 1"
+													shift_msg_data[6] = (shift_msg_data[6] & ~0x3) | (0x1 & 0x3);
+												}
+												if(currentRpmSpeed>(SHIFT_THRESHOLD+500-1) &&  currentRpmSpeed<(SHIFT_THRESHOLD+1000)){ //set lamp depending on rpm speed
+													//change byte6, bit 1 and 0(lsb) of the message to 10 (binary) meaning "gear shift urgency level 2"
+													shift_msg_data[6] = (shift_msg_data[6] & ~0x3) | (0x2 & 0x3);
+												}else if(currentRpmSpeed>(SHIFT_THRESHOLD+1000-1)){ //set lamp depending on rpm speed
+													//change byte6, bit 1 and 0(lsb) of the message to 11 (binary) meaning "gear shift urgency level 3"
+													shift_msg_data[6] = (shift_msg_data[6] & ~0x3) | (0x3 & 0x3);
+												}
+												can_tx(&shift_msg_header, shift_msg_data); //transmit the modified packet
+												//onboardLed_red_on();
+											}
+
+										}
+									#endif
+
+										//EngineWaterTemperature is on byte0
+										//fuel consumption is on byte 4 bit 0 to 3, byte 5, and byte 6 from bit 7 to 3
+									break;
+								case 0x000002EF: //se e' il messaggio che contiene la marcia (id 2ef) e se é lungo 8 byte
+									#if defined(LED_STRIP_CONTROLLER_ENABLED)
+										if(rx_msg_header.DLC==8){
+											scaledColorSet=scaleColorSet(rx_msg_data[0] & ~0xF); //prima di tutto azzeriamo i primi 4 bit meno significativi, poi scala il dato con la funzione scaleColorSet, per prepararlo per l'invio alla classe vumeter
+											vuMeterUpdate(scaledVolume,scaledColorSet);
+										}
+									#endif
+
+									//actual gear status is on byte 0 from bit 7 to 4 (0x0=neutral, 0x1 to 0x6=gear 1 to 6, 0x07=reverse gear, 0x8 to 0xA=gear 7 to 9, 0xF=SNA)
+									//suggested gear status is on byte 0 from bit 3 to 0
+									//DPF Regeneration mode is on byte 1 bit 7.
+									//SAM info is on byte 1 from bit 3 to 0
+									//stop start fault status is on byte 2 bit 7
+									//..
+									//boost pressure indication is on byte 3 bit from 6 to 0 and byte 4  bit 7
+
+
+									break;
+								case 0x000002FA: // Button is pressed on left area of the wheel
+									// This sequence works only if the main panel of the car is on.
+									// We commented this section since we are not using it now. Uncomment to use it.
+									// The cycle duration could increase and make blink the red led onboard.
+									// The action of the button's sequence is left empty for you to add it.
+
+
+									// it shall be different than 0x10 because sometimes is found on the bus,
+									// but we are not interested in it.
+									/*
+									if( (rx_msg_header.DLC==3) && (rx_msg_data[0]!=0x10) ){
+										//if 2 seconds has passed since last button press, restart password sequence
+										if (lastPressedWheelButtonTime+2000<HAL_GetTick()){
+											ButtonPressSequence1Index=0;
+											lastPressedWheelButtonDuration=0;
+											lastPressedWheelButtonTime=HAL_GetTick();
+										}
+										//if the previous button is still pressed, we shall consider it as the same button press
+										if ((lastPressedWheelButton== rx_msg_data[0]) ){
+											lastPressedWheelButtonDuration=lastPressedWheelButtonDuration+ (HAL_GetTick()-lastPressedWheelButtonTime) ;
+										}else{
+											//another button was pressed, let's consider it as a button release event:
+											//  if the button was pressed for at least 100msec, and if it is the button expected by the secret sequence
+											if(lastPressedWheelButtonDuration>100 && (lastPressedWheelButton==ButtonPressSequence1[ButtonPressSequence1Index])){
+												onboardLed_blue_on();
+												ButtonPressSequence1Index++; //prepare for next button in the sequence
+											}else{
+												//something else arrived. restart the sequence
+												ButtonPressSequence1Index=0;
+											}
+											lastPressedWheelButtonDuration=0;
+										}
+
+										//manage the particular case of last button of the sequence pressed for enough time
+										if(lastPressedWheelButtonDuration>100 && (lastPressedWheelButton==ButtonPressSequence1[ButtonPressSequence1Index]) && ButtonPressSequence1Index==ButtonPressSequence1Len-1){
+											ButtonPressSequence1Index++;
+										}
+
+										lastPressedWheelButton= rx_msg_data[0]; //store last pressed button
+										lastPressedWheelButtonTime=HAL_GetTick(); //store last time a button was pressed
+
+										//if password sequence was fully correctly typed...
+										if(ButtonPressSequence1Index==ButtonPressSequence1Len){
+											// reset password sequence, so that we can type it again in the future,
+											// then do what you shall do
+											ButtonPressSequence1Index=0;
+											onboardLed_red_on();
+											// what do we want to do? this will work only if the bus is not flood
+											// and the car panel is on.
+											// future usage....
+										}
+									}
+									*/
+									break;
+								case 0x00000412: //se e' il messaggio che contiene la pressione dell'acceleratore (id 412), se é lungo 5 byte, se il valore é >51 (sfrutto le info ottenute sniffando)
+									#if defined(LED_STRIP_CONTROLLER_ENABLED)
+										if( (rx_msg_header.DLC==5) && (rx_msg_data[3]>=51) ){
+											timeSinceLastReceivedAcceleratorMessage=HAL_GetTick();
+											ledsStripIsOn=1;
+											scaledVolume=scaleVolume(rx_msg_data[3]); //prendi il dato e scalalo, per prepararlo per l'invio alla classe vumeter
+											vuMeterUpdate(scaledVolume,scaledColorSet);
+										}
+									#endif
+									break;
+								case 0x000004B2:
+									//engine oil level is in byte 0 from bit 7 to 3.
+									//engine oil over fill status is on byte 0, bit 2.
+									//engine oil min. is on byte 0 bit 1
+									//engine oil pressure is on byte 0, bit 0 and on byte 1 from bit 7 to 1.
+									//power mode status is on byte 1 bit 0 and on byte 2 bit 7.
+									//engine water level is on byte 2 bit 6.
+									//engine oil temperature is on byte 2 from bit 5 to 0 and on byte 3 from bit 7 to 6.
+									//engine oil temperature warning light is on byte 3 bit 5.
+									break;
+								default:
+							}
+
+							break;
+						default:
+					}
+				}
 			}
 		}
 

@@ -11,6 +11,7 @@ This project uses the famous CANABLE (the cheapest can bus device on the market)
 - control a WS281x leds strip by means of the decoded can bus data, then lighting the leds strip according to accelerator pedal position and gear selection.
 - automatically disable start&stop car functionality
 - act as Immobilizer, by injecting can bus messages when required.
+- show SHIFT warning indicator on dashboard when configurable motor rpm speed is overcomed
 
 BACCABLE overview (click on the following image to see the video)
 [![IMAGE ALT TEXT HERE](https://img.youtube.com/vi/HStaXDe9asQ/0.jpg)](https://www.youtube.com/watch?v=HStaXDe9asQ)
@@ -25,6 +26,7 @@ I started the development from the famous SLCAN firmware (https://github.com/nor
 [![IMAGE ALT TEXT HERE](https://img.youtube.com/vi/v0ZhjYjx-OM/0.jpg)](https://www.youtube.com/watch?v=v0ZhjYjx-OM)
 
 - leds Controlling function  (watch the following video)
+  NOTE: video was not updated after firmware optimization. Now you have to uncomment the define LED_STRIP_CONTROLLER_ENABLED in order to use the led controlling functionality
   
 [![IMAGE ALT TEXT HERE](https://img.youtube.com/vi/QDK8YCOsdVM/0.jpg)](https://www.youtube.com/watch?v=QDK8YCOsdVM)
 
@@ -57,14 +59,21 @@ The leds strip is lighted accordingly to the movement of the accelerator pedal a
 
 This projet was tested on alfaromeo Giulia. Each one of you, if dealing with other car, should:
 - identify proprietary can bus messages, by sniffing data with savvycan.
+
+## Shift Warning Indicator
+The SHIFT warning indicator function allows you to show on dashboard the SHIFT warning label when configurable motor rpm speed is overcomed (3 levels of warning).
+The following video explains the behavious and the code description: [![IMAGE ALT TEXT HERE](https://img.youtube.com/vi/JYUBBTW4WRo/0.jpg)](https://www.youtube.com/watch?v=JYUBBTW4WRo)
+
+
 ## Usage Instructions
 You should perform some preliminary settings inside firmware:
 - If you want to use the device as usb can bus sniffer you shall uncomment #define ACT_AS_CANABLE in main.h
-- If you want to use the device as leds strip controller you shall comment #define ACT_AS_CANABLE in main.h
+- If you want to use the device as leds strip controller you shall comment the line " #define ACT_AS_CANABLE " and uncomment the line " #define LED_STRIP_CONTROLLER_ENABLED " in main.h
 - If you don't want to use the piece of code that disables the car start&stop at the power on, you shall comment #define DISABLE_START_STOP in main.h
 - If you want to disable IMMOBILIZER functionality, you shall comment #define IMMOBILIZER_ENABLED in main.h
 - In vumeter.c you shall set the number of leds in your leds strip, by modifing the following line: #define MAX_LED 46
-
+- If you want to use SHIFT WARNING INDICATOR functionality, you shall uncomment #define SHIFT_INDICATOR_ENABLED in main.h and set the define SHIFT_THRESHOLD to the rpm speed at which the indicator will start to be shown (5000rpm by default)
+ 
 Software to use:
 - use stm32CubeIde to compile on windows
 - use stm32CubeProgrammer to flash the firmware elf file contained in subfolder firmware\ledsStripController\Release 
@@ -103,9 +112,9 @@ note: the video doesn't show the connection from usb +5V required to use immobil
 [![IMAGE ALT TEXT HERE](https://img.youtube.com/vi/aylwa35GtuU/0.jpg)](https://www.youtube.com/watch?v=aylwa35GtuU)
 
 ## Firmware description
-The following video will show the strucure of the firmware:
+The following video will show the structure of the firmware.
 [![IMAGE ALT TEXT HERE](https://img.youtube.com/vi/zmMgXUu2TZM/0.jpg)](https://www.youtube.com/watch?v=zmMgXUu2TZM)
-Note: the video was made before to update the method to send rfhub reset message for 10 seconds.
+Note: the video was made before to update the method to send rfhub reset message for 10 seconds, and before of the code optimization in the main loop.
 
 ## Usage when configured to act as Canable
 when configured as canable the firmware acts as the classic SLCAN firmware. it means that you can use it with a pc equipped with savvycan tool, in order to sniff packets in the canbus. 
@@ -166,6 +175,7 @@ DMA controllers in STM32s support various operations, one of them being super ha
 We will use *HT* and *TC* events extensively, as they will be use to *prepare data* for next operations to transfer all bits for all leds.
 
 ## Alfa Romeo Giulia Protocol Reverse Engineering 
+Note (added on 29/12/2024): apart what i wrote in this paragraph, more message decoding was detailed inside main.c file, as comments for now, in order to be able to decode more messages in the near future. I don't have time to update this section now.
 
 These are information that I found and that I can share. Use everything this at your own risk.
 
@@ -175,10 +185,14 @@ These are information that I found and that I can share. Use everything this at 
    - message id 412 , fourth byte, changes from 33 to E6. I use this one!!
    - message id 736, second and third byte, changes from 3319 to E772
 
-1. The following message identifies gear selection (I use this too):
+2. The following message identifies gear selection (I use this too):
    - Message id 2ef, first byte: 0x70=Reverse , 0x00=Neutral, 0xf0=Undefined (in example pressed clutch), 0x10=first gear, 0x20=second gear ...and so on up to sixt gear
 
-2. According to Sniz (a famous guru), and to alfaobd developer, this is RFHUB Reset message. To make it work, this message shall be periodically sent (each 200msec should be ok, but i decided to send it each 10msec):
+3. Thanks to SniZ (a famous guru - https://alfatuning.app ), we know that message id 0x0fc contains motor rpm speed in first and second byte (the least significant 2 bits of the second byte are not related to rpm speed, and should not be used)
+
+4. Thanks to SniZ ( https://alfatuning.app ) , we know that message id 0x0ed contains the shift warning lamp directed to dashboard. The information is contained in byte6 of the message data (zero based), first 2 bits. Value 0= no indicator, 1=urgency level1, 2=urgency level2, 3=urgency level3 (the one with shift label)
+   
+2. Thanks to SniZ ( https://alfatuning.app ) , and to alfaobd developer, this is RFHUB Reset message. To make it work, this message shall be periodically sent (each 200msec should be ok, but i decided to send it each 10msec):
    - T18DAC7F180211010000000000 
 
 3. The following message sequence starts (and stops) car Alarm, but it works only if the bus is not flooden with other messages:
